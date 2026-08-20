@@ -1,8 +1,13 @@
+from dotenv import load_dotenv
+import os
+
+# Load .env before importing other modules
+load_dotenv(os.path.join(os.path.dirname(__file__), "../.env"))
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from backend.orchestrator.voice_session import VoiceSession
 import json
-import os
 import socket as _socket
 
 app = FastAPI(title="VĀYU Voice RAG Backend")

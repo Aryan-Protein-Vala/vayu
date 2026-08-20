@@ -350,6 +350,7 @@ export default function VayuApp() {
       <div className="top-meta">
         <span>HH GOA 2026</span>
         <span className="online"><i style={{ background: isWsConnected ? '#10b981' : '#f59e0b' }} /> {isWsConnected ? 'BACKEND CONNECTED' : 'CONNECTING...'}</span>
+        <button className="theme-toggle" onClick={stopSpeech} aria-label="Stop audio">STOP AUDIO</button>
         <button className="theme-toggle" onClick={() => setMuted((value) => !value)} aria-label={muted ? 'Unmute voice output' : 'Mute voice output'}>{muted ? 'VOICE OFF' : 'VOICE ON'}</button>
         <button className="theme-toggle" onClick={() => setLightMode((value) => !value)} aria-label={lightMode ? 'Switch to dark mode' : 'Switch to light mode'}>{lightMode ? 'DARK' : 'LIGHT'}</button>
       </div>
