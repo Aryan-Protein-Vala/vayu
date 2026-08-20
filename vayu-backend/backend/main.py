@@ -14,6 +14,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 @app.websocket("/ws/audio")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
@@ -29,11 +30,15 @@ async def websocket_endpoint(websocket: WebSocket):
                 if data.get("event") == "PARTIAL":
                     await session.handle_partial_transcript(data["text"])
                 elif data.get("event") == "FINAL":
-                    await session.handle_endpoint(data["text"])
+                    await session.handle_endpoint(
+                        data.get("text", ""),
+                        mime_type=data.get("mime_type", ""),
+                    )
     except (WebSocketDisconnect, RuntimeError):
         # RuntimeError: "Cannot call receive once a disconnect message has been received"
         await session.close()
         print("Client disconnected")
+
 
 @app.get("/api/benchmark/results")
 async def get_benchmark_results():
@@ -42,6 +47,7 @@ async def get_benchmark_results():
         with open(results_path, "r") as f:
             return json.load(f)
     return {"message": "Benchmark not run yet."}
+
 
 if __name__ == "__main__":
     import uvicorn

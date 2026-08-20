@@ -48,12 +48,17 @@ export default function VayuApp() {
   const [muted, setMuted] = useState(false)
   const [grounded, setGrounded] = useState(true)
   const [lastLatency, setLastLatency] = useState<number | null>(null)
+  const [voiceSource, setVoiceSource] = useState<'sarvam' | 'browser' | null>(null)
   const speaking = useRef(false)
   const mutedRef = useRef(false)
   const ws = useRef<WebSocket | null>(null)
   const mediaRecorder = useRef<MediaRecorder | null>(null)
   const recognition = useRef<any>(null)
   const latestTranscript = useRef('')
+  const latestAnswer = useRef('')
+  const ttsPending = useRef(false)
+  const ttsTimer = useRef<any>(null)
+  const sarvamAudio = useRef<HTMLAudioElement | null>(null)
 
   const connectWs = useCallback(() => {
     if (ws.current && (ws.current.readyState === WebSocket.OPEN || ws.current.readyState === WebSocket.CONNECTING)) {
@@ -101,10 +106,14 @@ export default function VayuApp() {
             latestTranscript.current = data.text
           } else if (data.event === 'FINAL_ANSWER') {
             setAnswer(data.answer)
+            latestAnswer.current = data.answer
             setSources(data.sources || [])
             setGrounded(data.grounded !== false)
             if (typeof data.latency_ms === 'number') setLastLatency(data.latency_ms)
-            speakAnswer(data.answer)
+            // Wait briefly for Sarvam TTS audio; fall back to browser TTS.
+            scheduleVoiceFallback()
+          } else if (data.event === 'TTS_AUDIO') {
+            handleTtsAudio(data)
           } else if (data.event === 'INTERRUPT') {
             setAnswer('')
             setState('IDLE')
@@ -135,17 +144,32 @@ export default function VayuApp() {
     }
   }, [connectWs])
 
+  // Keep the mute flag in a ref so the stable useCallbacks below never go stale.
+  useEffect(() => { mutedRef.current = muted }, [muted])
+
+  const clearTtsTimer = useCallback(() => {
+    if (ttsTimer.current) {
+      clearTimeout(ttsTimer.current)
+      ttsTimer.current = null
+    }
+  }, [])
+
   const stopSpeech = useCallback(() => {
+    clearTtsTimer()
+    ttsPending.current = false
     try {
+      if (sarvamAudio.current) {
+        sarvamAudio.current.pause()
+        sarvamAudio.current.src = ''
+        sarvamAudio.current = null
+      }
       if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
         window.speechSynthesis.cancel()
       }
     } catch {}
-  }, [])
+  }, [clearTtsTimer])
 
-  // Keep the mute flag in a ref so the stable useCallback below never goes stale.
-  useEffect(() => { mutedRef.current = muted }, [muted])
-
+  /** Browser SpeechSynthesis — the offline fallback voice. */
   const speakAnswer = useCallback((text: string) => {
     if (mutedRef.current) return
     try {
@@ -158,6 +182,51 @@ export default function VayuApp() {
       }
     } catch {}
   }, [])
+
+  /** Play Sarvam TTS audio (pretty voice) via an <audio> element. */
+  const playSarvamAudio = useCallback((b64: string, format: string) => {
+    if (mutedRef.current) return
+    try {
+      stopSpeech()
+      const audio = new Audio(`data:audio/${format === 'mp3' ? 'mpeg' : 'wav'};base64,${b64}`)
+      sarvamAudio.current = audio
+      audio.play().catch(() => {
+        // Autoplay blocked -> fall back to browser voice
+        if (latestAnswer.current) speakAnswer(latestAnswer.current)
+      })
+    } catch {
+      if (latestAnswer.current) speakAnswer(latestAnswer.current)
+    }
+  }, [stopSpeech, speakAnswer])
+
+  /**
+   * FINAL_ANSWER arrives as text first (low latency). We wait ~1.5s for the
+   * Sarvam TTS audio event; if it never comes (offline sandbox / no key),
+   * speak with the browser voice instead.
+   */
+  const scheduleVoiceFallback = useCallback(() => {
+    clearTtsTimer()
+    ttsPending.current = true
+    ttsTimer.current = setTimeout(() => {
+      ttsPending.current = false
+      if (latestAnswer.current) speakAnswer(latestAnswer.current)
+      setVoiceSource('browser')
+    }, 1500)
+  }, [clearTtsTimer, speakAnswer])
+
+  /** TTS_AUDIO from backend: Sarvam wav/mp3, or 'browser' when unavailable. */
+  const handleTtsAudio = useCallback((data: any) => {
+    clearTtsTimer()
+    ttsPending.current = false
+    if (mutedRef.current) return
+    if (data.engine === 'sarvam' && data.audio) {
+      setVoiceSource('sarvam')
+      playSarvamAudio(data.audio, data.format || 'wav')
+    } else {
+      setVoiceSource('browser')
+      if (latestAnswer.current) speakAnswer(latestAnswer.current)
+    }
+  }, [clearTtsTimer, playSarvamAudio, speakAnswer])
 
   const beginSpeak = useCallback(async () => {
     if (speaking.current) return
@@ -232,7 +301,11 @@ export default function VayuApp() {
     const queryToSend = latestTranscript.current || transcript || 'What is the main topic in the retrieved context?'
 
     if (ws.current && ws.current.readyState === WebSocket.OPEN) {
-      ws.current.send(JSON.stringify({ event: 'FINAL', text: queryToSend }))
+      ws.current.send(JSON.stringify({
+        event: 'FINAL',
+        text: queryToSend,
+        mime_type: mediaRecorder.current?.mimeType || 'audio/webm',
+      }))
     }
   }, [transcript])
 
@@ -311,7 +384,7 @@ export default function VayuApp() {
       <button className="speak-button" onPointerDown={beginSpeak} onPointerUp={endSpeak} onPointerCancel={endSpeak} onPointerLeave={endSpeak} aria-label="Press and hold to speak">{state === 'LISTENING' ? 'RELEASE TO STOP' : 'HOLD TO SPEAK'}</button>
     </section>
     {transcript && <section className="readout"><SectionLabel>LIVE TRANSCRIPT</SectionLabel><p className="transcript">“{transcript}”</p></section>}
-    {state === 'COMPLETE' && <section className="answer-section"><div><SectionLabel>ANSWER / GROUNDED</SectionLabel><p className="answer">{answer}</p><div className="answer-meta"><span>{grounded ? 'GROUNDED ✓' : 'NOT GROUNDED'}</span><span>{sources.length.toString().padStart(2, '0')} SOURCES</span>{lastLatency !== null && <span>~{Math.round(lastLatency)}MS TOTAL</span>}</div></div><div className="answer-stamp">VĀYU<br /><small>BRIEFING 001</small></div></section>}
+    {state === 'COMPLETE' && <section className="answer-section"><div><SectionLabel>ANSWER / GROUNDED</SectionLabel><p className="answer">{answer}</p><div className="answer-meta"><span>{grounded ? 'GROUNDED ✓' : 'NOT GROUNDED'}</span><span>{sources.length.toString().padStart(2, '0')} SOURCES</span>{lastLatency !== null && <span>~{Math.round(lastLatency)}MS TOTAL</span>}{voiceSource && <span>{voiceSource === 'sarvam' ? 'SARVAM VOICE' : 'BROWSER VOICE'}</span>}</div></div><div className="answer-stamp">VĀYU<br /><small>BRIEFING 001</small></div></section>}
     <section className="trace-section"><button className="trace-toggle" onClick={() => setShowSources(!showSources)}><span><SectionLabel>SOURCE TRACE</SectionLabel><b>Retrieved context / inspectable evidence</b></span><span className="trace-arrow">{showSources ? '−' : '+'}</span></button>{showSources && <div className="source-list">{sources.map(([name, score, copy], i) => <article className="source-row" key={name}><span className="source-number">0{i + 1}</span><div><b>{name}</b><p>{copy}</p><small>RELEVANCE {score} · SEMANTIC CHUNK · EN</small></div></article>)}</div>}</section>
     <section className="performance" id="performance"><div><SectionLabel>SYSTEM PERFORMANCE <span className="demo-pill">TELEMETRY</span></SectionLabel><h2>Fast enough to stay<br /><em>inside the conversation.</em></h2></div><div className="metrics">{
       benchmarkData && benchmarkData['Total End-to-End Latency']
@@ -326,16 +399,18 @@ export default function VayuApp() {
             <div><b>&lt;2</b><span>P100 / MS</span></div>
           </>
     }<p>✓ WITHIN TARGET <small>&lt; 100 MS · RETRIEVAL PIPELINE · + GROQ TTFT ≈ 50 MS</small></p></div></section>
-    <section className="pipeline"><SectionLabel>PIPELINE TELEMETRY <span className="demo-pill">REAL MEASURED P50</span></SectionLabel><div className="pipeline-grid">{[
+    <section className="pipeline"><SectionLabel>PIPELINE TELEMETRY <span className="demo-pill">REAL MEASURED P50 · EST = NETWORK</span></SectionLabel><div className="pipeline-grid">{[
         ['VOICE INPUT','WEBM STREAM','—'],
-        ['GUARDRAIL', bench('Guardrail Validation', 0.01), '01'],
-        ['EMBEDDING', bench('Embedding', 0.1), '02'],
-        ['FAISS SEARCH', bench('FAISS Search', 0.6), '03'],
-        ['PARENT LOOKUP', bench('Parent Chunk Resolution', 0.03), '04'],
-        ['GROQ TTFT', '~48 (EST)', '05'],
-        ['GROUNDING', bench('Grounding Validator', 0.01), '06']
+        ['SARVAM STT', '~200 (EST)', '01'],
+        ['GUARDRAIL', bench('Guardrail Validation', 0.01), '02'],
+        ['EMBEDDING', bench('Embedding', 0.5), '03'],
+        ['FAISS SEARCH', bench('FAISS Search', 0.02), '04'],
+        ['PARENT LOOKUP', bench('Parent Chunk Resolution', 0.01), '05'],
+        ['GROQ TTFT', '~48 (EST)', '06'],
+        ['GROUNDING', bench('Grounding Validator', 0.01), '07'],
+        ['SARVAM TTS', '~250 (EST)', '08']
       ].map(([a,b,c]) => <div key={a as string}><span>{c}</span><b>{a}</b><small>{b}</small></div>)}</div></section>
-    <section className="architecture"><SectionLabel>HOW VĀYU WORKS</SectionLabel><h2>A shorter path from voice<br /><em>to verified answer.</em></h2><div className="arch-line">{['VOICE','SARVAM / SPEECH','SPECULATIVE RETRIEVAL','TF-IDF EMBED','FAISS INDEX','PARENT CONTEXT','GROQ LLAMA-3','GUARDRAILS','GROUNDED ANSWER'].map((x, i) => <div key={x}><span>{String(i + 1).padStart(2, '0')}</span><b>{x}</b></div>)}</div></section>
+    <section className="architecture"><SectionLabel>HOW VĀYU WORKS</SectionLabel><h2>A shorter path from voice<br /><em>to verified answer.</em></h2><div className="arch-line">{['VOICE','SARVAM STT','SPECULATIVE RETRIEVAL','TF-IDF EMBED','FAISS INDEX','PARENT CONTEXT','GROQ LLAMA-3','GUARDRAILS','SARVAM TTS'].map((x, i) => <div key={x}><span>{String(i + 1).padStart(2, '0')}</span><b>{x}</b></div>)}</div></section>
     <section className="lower-grid"><div><SectionLabel>CHUNKING STRATEGY</SectionLabel><h2>Vast context.<br /><em>Small decisions.</em></h2><div className="chunk-visual"><div className="parent-box"><span>PARENT PASSAGE</span><div className="child-box">RETRIEVED CHILD CHUNK</div><i /><i /><i /></div></div><p className="body-copy">Sentence, semantic, and parent chunks work together: precision at retrieval time, continuity at answer time.</p></div><div><SectionLabel>GROUNDING & SAFETY</SectionLabel><h2>Evidence before<br /><em>confidence.</em></h2><div className="guardrail"><div><span>01</span>INPUT</div><div><span>02</span>LOCAL GUARDRAIL</div><div><span>03</span>RETRIEVAL</div><div><span>04</span>GROUNDED GENERATION</div><div><span>05</span>OUTPUT VALIDATOR</div></div><p className="grounded-note">✓ GROUNDED<br /><small>Every answer carries its source trace.</small></p></div></section>
     <section className="principles"><SectionLabel>ENGINEERING PRINCIPLES</SectionLabel><div className="principle-grid">{[['01','STREAM','Streaming speech recognition begins before the user finishes speaking.'],['02','SPECULATE','Partial transcripts trigger retrieval before the utterance ends.'],['03','RETRIEVE LOCALLY','Embeddings and FAISS retrieval happen locally in the backend.'],['04','GROUND','The final answer must be supported by retrieved context.']].map(([n,t,c]) => <article key={n}><span>{n}</span><h3>{t}</h3><p>{c}</p></article>)}</div></section>
     <footer><b>VĀYU</b><span>VOICE-ENABLED RAG · HH GOA 2026</span><span>#RAGINGOA</span></footer>

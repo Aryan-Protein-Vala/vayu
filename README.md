@@ -6,14 +6,26 @@
 
 ## 🌪️ Executive Summary
 
-**VĀYU** is a production-grade, voice-first Retrieval-Augmented Generation (RAG) system engineered for conversational real-time response times. Built to meet and exceed the strict **50-100ms latency requirement**, VĀYU combines streaming voice input, speculative in-memory vector retrieval, hierarchical parent-child chunking, deterministic input/output guardrails, and ultra-fast LLM generation powered by Groq LPUs.
+**VĀYU** is a production-grade, voice-first Retrieval-Augmented Generation (RAG) system engineered for conversational real-time response times. Built to meet and exceed the strict **50-100ms latency requirement**, VĀYU combines Sarvam speech-to-text & text-to-speech, speculative in-memory vector retrieval, hierarchical overlapping chunking, deterministic input/output guardrails, and ultra-fast LLM generation powered by Groq LPUs.
 
 ```
-[User Voice] ────► [Streaming STT] ────► [Speculative Retrieval]
+[User Voice] ──► [Sarvam STT (saaras)] ──► [Speculative Retrieval]
                                                   │
                                                   ▼
 [Grounded Answer] ◄── [Groq LPU (Llama 3)] ◄── [FAISS In-RAM] ◄── [Guardrails]
+         │
+         ▼
+[Sarvam TTS (bulbul) — pretty voice back to the user]
 ```
+
+### Voice roles — who does what
+| Capability | Primary engine | Fallback (offline / no key) |
+| :--- | :--- | :--- |
+| **Speech-to-text** (task req #1: Sarvam or ElevenLabs) | **Sarvam STT** (`saaras:v2`) on buffered mic audio | Browser Web Speech API transcript |
+| **Text-to-speech** (pretty voice out) | **Sarvam TTS** (`bulbul:v2`, speakers like `meera`) → wav over WebSocket | Browser `speechSynthesis` |
+| Live partial transcript while speaking | Browser Web Speech API (interim results) | — |
+
+The frontend shows **`SARVAM VOICE`** vs **`BROWSER VOICE`** in the answer meta so you always know which engine spoke.
 
 ---
 
@@ -52,11 +64,13 @@ shown separately — the retrieval pipeline alone is far inside the 50-100ms win
 
 ## 🧠 System Architecture & Engineering Principles
 
-### 1. Vast Hierarchical Chunking (Parent-Child Strategy)
-Naive fixed-size chunking leads to context fragmentation and low retrieval precision. VĀYU employs a **Hierarchical Parent-Child Chunking** strategy:
-- **Child Chunks (Granular)**: 1-2 sentence semantic chunks enriched with metadata (`Language`, `Category`, `Parent ID`). Used for dense vector indexing in FAISS to maximize cosine similarity matching precision.
-- **Parent Passages (Comprehensive)**: Complete original paragraphs / documents stored in an in-memory hash table.
-- **Resolution**: When a child chunk matches in FAISS, the system maps back to the parent passage in `O(1)` time, providing the LLM with rich, coherent context without noisy irrelevant text.
+### 1. Vast Hierarchical Chunking (requirement #2)
+Naive fixed-size chunking leads to context fragmentation and low retrieval precision. VĀYU employs a **multi-strategy chunking pipeline** (`scripts/build_chunks.py`):
+- **Parent-Child hierarchy**: full passages are parents; granular 1–2 sentence groups are the indexed children → precision at retrieval, context continuity at answer time.
+- **Overlap handling**: children slide with a 1-sentence overlap (`chunk_sentences=2, overlap_sentences=1`) so no concept is orphaned at a boundary.
+- **Semantic vs fixed-size hybrid**: splitting happens on sentence boundaries (semantic), then grouped into fixed-size N-sentence windows.
+- **Metadata-aware enrichment**: every child carries `Language | Category | ID | Title | Content` so retrieval can be faceted and the LLM gets provenance.
+- **Dataset ready for MSMARCO-XI** (task dataset): `build_chunks.py` reads `ai4bharat/MSMARCO-XI` (query/passages/is_selected schema) and tags selected answer passages as `msmarco-answer`; falls back to SQuAD for offline testing (`VAYU_DATASET=squad`).
 
 ### 2. Speculative Retrieval & Zero-Wait Execution
 - As the user speaks, interim speech transcripts trigger **speculative background searches** over WebSockets before the user even finishes their sentence.
@@ -79,7 +93,8 @@ Naive fixed-size chunking leads to context fragmentation and low retrieval preci
 - **Backend**: FastAPI, Uvicorn, Python 3.10+, WebSockets.
 - **Vector Database**: FAISS (`IndexFlatIP`), In-Memory JSON store.
 - **Embeddings**: TF-IDF (`sklearn TfidfVectorizer`, 512 dims) — swap to `BAAI/bge-small-en-v1.5` when HF is reachable.
-- **Speech-to-Text**: Sarvam AI (`saaras:v2` / `saaras:v3`) + Web Speech API.
+- **Speech-to-Text**: **Sarvam AI** (`saaras:v2`) on buffered mic audio + Web Speech API partials.
+- **Text-to-Speech**: **Sarvam AI** (`bulbul:v2`, speakers like `meera`) + browser `speechSynthesis` fallback.
 - **LLM Generation**: Groq LPU (`llama3-8b-8192`) with streaming token delivery.
 
 ---
@@ -116,11 +131,17 @@ pip install -r requirements.txt
 # GROQ_API_KEY=your_groq_key
 # HF_TOKEN=your_hf_token
 
+# Optional voice tuning:
+# SARVAM_STT_MODEL=saaras:v2
+# SARVAM_TTS_MODEL=bulbul:v2
+# SARVAM_TTS_SPEAKER=meera            # try: meera, arvind, plus multilingual
+# SARVAM_TTS_LANGUAGE=en-IN
+
 # Build dataset chunks & FAISS index (One-time setup)
 # Option A: local synthetic SQuAD-like data (works offline)
 python scripts/generate_data.py
 # Option B: download from HuggingFace (requires HF_TOKEN)
-python scripts/build_chunks.py
+python scripts/build_chunks.py          # MSMARCO-XI by default; VAYU_DATASET=squad for fallback
 python scripts/build_index.py
 
 # Start FastAPI server
@@ -172,6 +193,17 @@ python -m backend.benchmark.run_benchmark
 3. Deploy! When `NEXT_PUBLIC_API_URL` is set, the localhost dev-proxy rewrites are automatically disabled.
 
 ---
+
+## ✅ Requirements Checklist (HH Goa Task 2)
+
+| Requirement | Implementation |
+| :--- | :--- |
+| **1. STT (Sarvam or ElevenLabs)** | Sarvam `saaras:v2` on buffered mic audio (`backend/stt/sarvam.py`); browser Web Speech as offline fallback |
+| **2. Vast chunking strategy** | Parent-child hierarchy + 1-sentence overlap + semantic/fixed hybrid + metadata-aware enrichment; MSMARCO-XI ready (`scripts/build_chunks.py`) |
+| **3. Latency < 200ms** | Retrieval pipeline P50 = **0.65ms** (measured); full pipeline ≈ 49ms with Groq TTFT estimate |
+| **4. P50/P70/P100 analytics** | `backend/benchmark/run_benchmark.py` — 24 queries, real per-stage timings → `benchmark_results.json` (shown live on the site) |
+| **5. Model harness** | `VoiceSession` orchestrator: parallel guardrail+retrieval tasks, Groq/Sarvam retries w/ exponential backoff, structured WS events, error recovery, offline fallbacks, barge-in cancellation |
+| **6. Guardrails** | Input regex (injection/off-topic) in parallel with retrieval; output grounding validator checks citations ⊆ retrieved parent IDs (`Guardrails.check_grounding`) |
 
 ## 👥 Team & Submission Info
 - **Event**: HH Goa 2026 Shortlisting Task 2

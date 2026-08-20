@@ -5,32 +5,52 @@ import time
 from groq import AsyncGroq
 from backend.retrieval.engine import get_engine
 from backend.guardrails.rules import Guardrails
+from backend.stt.sarvam import get_sarvam
 from starlette.websockets import WebSocket
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-SARVAM_API_KEY = os.getenv("SARVAM_API_KEY", "")
 
 groq_client = AsyncGroq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
 
 class VoiceSession:
+    """Orchestrates the full voice pipeline as a structured harness:
+
+    audio bytes -> (barge-in check) -> buffer
+    FINAL       -> Sarvam STT (fallback: browser transcript)
+               -> guardrails + speculative retrieval (parallel)
+               -> grounded generation (Groq, fallback: context answer)
+               -> output grounding validation
+               -> Sarvam TTS (fallback: browser SpeechSynthesis)
+    """
+
     def __init__(self, websocket: WebSocket):
         self.ws = websocket
         self.is_generating = False
         self.generate_task = None
         self.engine = get_engine()
+        self.sarvam = get_sarvam()
         self.transcript_buffer = ""
         self.speculative_context = []
+        self.audio_buffer = bytearray()
+        self.audio_mime = "audio/webm"
 
+    # ------------------------------------------------------------ audio path
     async def handle_audio_chunk(self, chunk: bytes):
-        """Receives audio bytes (future Sarvam STT pipe). For now: barge-in only."""
+        """Buffer mic audio for Sarvam STT + detect barge-in."""
+        # Barge-in: new audio while generating -> interrupt
         if self.is_generating and self.generate_task and not self.generate_task.done():
             self.generate_task.cancel()
             self.is_generating = False
             await self.ws.send_json({"event": "INTERRUPT"})
 
+        # Buffer for STT (cap ~10s @48kHz stereo 16-bit ≈ 1.9 MB, we use ~4MB cap)
+        if len(self.audio_buffer) < 4_000_000:
+            self.audio_buffer.extend(chunk)
+
+    # -------------------------------------------------------- partial path
     async def handle_partial_transcript(self, text: str):
-        """Interim transcripts -> live echo + speculative retrieval."""
+        """Browser STT partials -> live echo + speculative retrieval."""
         self.transcript_buffer = text
         await self.ws.send_json({"event": "PARTIAL_TRANSCRIPT", "text": text})
 
@@ -42,20 +62,36 @@ class VoiceSession:
         results = await self.engine.search_async(text, top_k=3)
         self.speculative_context = results
 
-    async def handle_endpoint(self, final_text: str):
-        """Final transcript -> guardrails + retrieval in parallel -> generation."""
+    # ---------------------------------------------------------- final path
+    async def handle_endpoint(self, final_text: str, mime_type: str = ""):
+        """Speech stopped. Authoritative transcript via Sarvam STT (when audio
+        was captured), then run the retrieval + generation harness."""
         await self.ws.send_json({"event": "STATE", "state": "PROCESSING"})
 
-        guardrail_task = asyncio.create_task(
-            Guardrails.run_parallel_input_guardrail(final_text)
-        )
-        retrieval_task = asyncio.create_task(
-            self.engine.search_async(final_text, top_k=3)
-        )
+        query = (final_text or "").strip()
 
-        guardrail_result, final_context = await asyncio.gather(
-            guardrail_task, retrieval_task
+        # 1. Sarvam STT on buffered audio (requirement #1: Sarvam STT).
+        #    Falls back to the browser transcript if audio/Sarvam unavailable.
+        if self.audio_buffer:
+            if mime_type:
+                self.audio_mime = mime_type
+            stt_text = await self.sarvam.transcribe(bytes(self.audio_buffer), self.audio_mime)
+            self.audio_buffer.clear()
+            if stt_text:
+                query = stt_text
+                await self.ws.send_json({"event": "STT_RESULT", "text": query, "engine": "sarvam"})
+            else:
+                await self.ws.send_json({"event": "STT_RESULT", "text": query, "engine": "browser"})
+
+        if not query:
+            query = self.transcript_buffer.strip() or "What is the main topic in the retrieved context?"
+
+        # 2. Guardrails + retrieval in parallel
+        guardrail_task = asyncio.create_task(
+            Guardrails.run_parallel_input_guardrail(query)
         )
+        retrieval_task = asyncio.create_task(self.engine.search_async(query, top_k=3))
+        guardrail_result, final_context = await asyncio.gather(guardrail_task, retrieval_task)
 
         if not guardrail_result["safe"]:
             await self.ws.send_json({
@@ -68,12 +104,14 @@ class VoiceSession:
             await self.ws.send_json({"event": "STATE", "state": "COMPLETE"})
             return
 
+        # 3. Grounded generation (Groq with fallback)
         self.generate_task = asyncio.create_task(
-            self._generate_response(final_text, final_context)
+            self._generate_response(query, final_context)
         )
 
+    # ------------------------------------------------------ generation path
     async def _generate_response(self, query: str, context: list):
-        """Grounded generation + output grounding validation + timing."""
+        """Grounded generation + output grounding validation + Sarvam TTS."""
         self.is_generating = True
         t_start = time.perf_counter()
         await self.ws.send_json({"event": "STATE", "state": "GENERATING"})
@@ -95,20 +133,32 @@ Question:
 """
         full_answer = ""
         try:
+            # Groq generation with a single retry (harness error recovery)
             if groq_client:
-                response = await groq_client.chat.completions.create(
-                    messages=[{"role": "system", "content": prompt}],
-                    model="llama3-8b-8192",
-                    temperature=0.1,
-                    stream=True,
-                )
-                async for chunk in response:
-                    if chunk.choices[0].delta.content:
-                        full_answer += chunk.choices[0].delta.content
+                for attempt in range(2):
+                    try:
+                        response = await groq_client.chat.completions.create(
+                            messages=[{"role": "system", "content": prompt}],
+                            model="llama3-8b-8192",
+                            temperature=0.1,
+                            stream=True,
+                        )
+                        async for chunk in response:
+                            if chunk.choices[0].delta.content:
+                                full_answer += chunk.choices[0].delta.content
+                        break
+                    except Exception as exc:
+                        print(f"[groq] attempt {attempt + 1} failed: {exc}")
+                        if attempt == 0:
+                            await asyncio.sleep(0.2)
+                        else:
+                            full_answer = ""
             else:
-                # Offline fallback: answer is constructed verbatim from the
-                # retrieved parent passage with an explicit citation, so it is
-                # grounded by construction.
+                full_answer = ""
+
+            if not full_answer.strip():
+                # Offline fallback: answer verbatim from retrieved passage,
+                # grounded by construction with an explicit citation.
                 if context:
                     best = context[0]
                     full_answer = (
@@ -120,7 +170,7 @@ Question:
                         "I couldn't find relevant information in the retrieved context."
                     )
 
-            # ---- Output grounding validation (hallucination defense) ----
+            # Output grounding validation (hallucination defense)
             t_ground = time.perf_counter_ns()
             retrieved_ids = {c["parent_id"] for c in context}
             grounded = Guardrails.check_grounding(full_answer, retrieved_ids)
@@ -137,6 +187,7 @@ Question:
                     preview,
                 ])
 
+            # Send the text answer immediately (low latency UX)...
             await self.ws.send_json({
                 "event": "FINAL_ANSWER",
                 "answer": full_answer,
@@ -146,6 +197,9 @@ Question:
                 "grounding_ms": round(ground_ms, 3),
             })
             await self.ws.send_json({"event": "STATE", "state": "COMPLETE"})
+
+            # ...then pipe the pretty voice (Sarvam TTS) — non-blocking.
+            asyncio.create_task(self._send_tts(full_answer))
 
         except asyncio.CancelledError:
             print("Generation cancelled due to barge-in.")
@@ -164,6 +218,27 @@ Question:
                 pass
         finally:
             self.is_generating = False
+
+    async def _send_tts(self, text: str):
+        """Sarvam TTS -> wav audio over WebSocket. Frontend falls back to
+        browser SpeechSynthesis if this event never arrives."""
+        try:
+            result = await self.sarvam.synthesize(text)
+            if result.get("audio"):
+                await self.ws.send_json({
+                    "event": "TTS_AUDIO",
+                    "audio": result["audio"],
+                    "format": result.get("format", "wav"),
+                    "engine": "sarvam",
+                })
+            else:
+                await self.ws.send_json({"event": "TTS_AUDIO", "engine": "browser"})
+        except Exception as exc:
+            print(f"[sarvam] TTS send failed: {exc}")
+            try:
+                await self.ws.send_json({"event": "TTS_AUDIO", "engine": "browser"})
+            except Exception:
+                pass
 
     async def close(self):
         """Clean up when the client disconnects."""

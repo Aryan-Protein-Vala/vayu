@@ -60,11 +60,16 @@ documents = [
 ]
 
 
-def chunk_text(text, max_sentences=2):
-    """Split text into chunks of max_sentences sentences."""
-    sentences = re.split(r'(?<=[.!?])\s+', text.strip())
+def chunk_text(text, max_sentences=2, overlap_sentences=1):
+    """Sentence-boundary split with sliding overlap (same 'vast' strategy as
+    build_chunks.py): hybrid semantic + fixed-size, overlap-aware, and the
+    enriched children make retrieval metadata-aware."""
+    sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', text.strip()) if s.strip()]
+    if not sentences:
+        return []
+    step = max(1, max_sentences - overlap_sentences)
     chunks = []
-    for i in range(0, len(sentences), max_sentences):
+    for i in range(0, len(sentences), step):
         chunk = " ".join(sentences[i:i+max_sentences])
         if chunk.strip():
             chunks.append(chunk.strip())
