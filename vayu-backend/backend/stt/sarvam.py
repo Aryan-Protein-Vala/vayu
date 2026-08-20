@@ -20,9 +20,9 @@ import httpx
 
 SARVAM_API_KEY = os.getenv("SARVAM_API_KEY", "")
 SARVAM_BASE_URL = os.getenv("SARVAM_BASE_URL", "https://api.sarvam.ai")
-STT_MODEL = os.getenv("SARVAM_STT_MODEL", "saaras:v2")
+STT_MODEL = os.getenv("SARVAM_STT_MODEL", "saaras:v3")
 TTS_MODEL = os.getenv("SARVAM_TTS_MODEL", "bulbul:v2")
-TTS_SPEAKER = os.getenv("SARVAM_TTS_SPEAKER", "meera")
+TTS_SPEAKER = os.getenv("SARVAM_TTS_SPEAKER", "anushka")
 TTS_LANGUAGE = os.getenv("SARVAM_TTS_LANGUAGE", "en-IN")
 TTS_SAMPLE_RATE = int(os.getenv("SARVAM_TTS_SAMPLE_RATE", "22050"))
 TTS_AUDIO_FORMAT = os.getenv("SARVAM_TTS_AUDIO_FORMAT", "wav")
@@ -128,7 +128,7 @@ class SarvamClient:
                     "speech_sample_rate": TTS_SAMPLE_RATE,
                     "audio_format": TTS_AUDIO_FORMAT,
                     "model": self.tts_model,
-                    "text": text,
+                    "inputs": [text],
                 },
             )
         except Exception as exc:

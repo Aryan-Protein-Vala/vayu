@@ -139,7 +139,7 @@ Question:
                     try:
                         response = await groq_client.chat.completions.create(
                             messages=[{"role": "system", "content": prompt}],
-                            model="llama3-8b-8192",
+                            model="llama-3.1-8b-instant",
                             temperature=0.1,
                             stream=True,
                         )
