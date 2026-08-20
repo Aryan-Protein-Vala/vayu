@@ -131,15 +131,6 @@ async def run():
                 "P70": float(f"{np.percentile(times, 70):.3f}"),
                 "P100": float(f"{np.percentile(times, 100):.3f}"),
             }
-    summary["Real Groq TTFT"] = {
-        "P50": float(f"{np.percentile(groq_ttfts, 50):.3f}") if groq_ttfts else 0.0,
-        "P70": float(f"{np.percentile(groq_ttfts, 70):.3f}") if groq_ttfts else 0.0,
-        "P100": float(f"{np.percentile(groq_ttfts, 100):.3f}") if groq_ttfts else 0.0,
-    }
-    with open(out_path, "w") as f:
-        json.dump(summary, f, indent=4)
-    print(f"Results saved to {out_path}")
-
     # --- Live Groq TTFT Measurement ---
     print("Measuring real Groq TTFT (5 queries)...")
     groq_ttfts = []
@@ -149,8 +140,9 @@ async def run():
             try:
                 response = await groq_client.chat.completions.create(
                     messages=[{"role": "user", "content": "Hello!"}],
-                    model="openai/gpt-oss-20b",
+                    model="groq/compound-mini",
                     temperature=0.1,
+                    max_tokens=150,
                     stream=True
                 )
                 async for chunk in response:
@@ -160,7 +152,17 @@ async def run():
             except Exception as e:
                 print(f"Groq API error: {e}")
                 break
-    
+                
+    summary["Real Groq TTFT"] = {
+        "P50": float(f"{np.percentile(groq_ttfts, 50):.3f}") if groq_ttfts else 0.0,
+        "P70": float(f"{np.percentile(groq_ttfts, 70):.3f}") if groq_ttfts else 0.0,
+        "P100": float(f"{np.percentile(groq_ttfts, 100):.3f}") if groq_ttfts else 0.0,
+    }
+    with open(out_path, "w") as f:
+        json.dump(summary, f, indent=4)
+    print(f"Results saved to {out_path}")
+
+    print(f"Results saved to {out_path}")
     e2e = metrics["Total End-to-End Latency"]
     p50 = np.percentile(e2e, 50)
     

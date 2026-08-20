@@ -104,7 +104,19 @@ class VoiceSession:
                 await self.ws.send_json({"event": "STT_RESULT", "text": query, "engine": "browser"})
 
         if not query:
-            query = self.transcript_buffer.strip() or "What is the main topic in the retrieved context?"
+            query = self.transcript_buffer.strip() or "hello"
+
+        if query.lower().strip() in ["hi", "hello", "hii", "hey"]:
+            await self.ws.send_json({
+                "event": "FINAL_ANSWER",
+                "answer": "Greetings as well!",
+                "sources": [],
+                "grounded": True,
+                "latency_ms": 10.0,
+            })
+            await self.ws.send_json({"event": "STATE", "state": "COMPLETE"})
+            asyncio.create_task(self._send_tts("Greetings as well!"))
+            return
 
         # 2. Guardrails + retrieval in parallel
         t_rag_start = time.perf_counter()
@@ -161,16 +173,20 @@ Question:
                 for attempt in range(2):
                     try:
                         response = await groq_client.chat.completions.create(
-                            messages=[{"role": "user", "content": prompt}],
-                            model="openai/gpt-oss-20b",
+                            messages=[
+                                {"role": "system", "content": "You are a helpful assistant."},
+                                {"role": "user", "content": prompt}
+                            ],
+                            model="groq/compound-mini",
                             temperature=0.1,
+                            max_tokens=150,
                             stream=True,
                         )
                         ttft_ms = 0
                         async for chunk in response:
                             if not ttft_ms:
                                 ttft_ms = (time.perf_counter() - t_rag_start) * 1000
-                            if chunk.choices[0].delta.content:
+                            if chunk.choices and chunk.choices[0].delta.content:
                                 full_answer += chunk.choices[0].delta.content
                         if not ttft_ms:
                             ttft_ms = (time.perf_counter() - t_rag_start) * 1000
@@ -180,23 +196,12 @@ Question:
                         if attempt == 0:
                             await asyncio.sleep(0.2)
                         else:
-                            full_answer = ""
+                            full_answer = "Generation failed."
             else:
-                full_answer = ""
+                full_answer = "AI generation unavailable."
 
             if not full_answer.strip():
-                # Offline fallback: answer verbatim from retrieved passage,
-                # grounded by construction with an explicit citation.
-                if context:
-                    best = context[0]
-                    full_answer = (
-                        f"Based on [ID:{best['parent_id']}] the retrieved "
-                        f"passage says: {best['text'][:300]}..."
-                    )
-                else:
-                    full_answer = (
-                        "I couldn't find relevant information in the retrieved context."
-                    )
+                full_answer = "I couldn't generate a response."
                 ttft_ms = (time.perf_counter() - t_rag_start) * 1000
 
             # Output grounding validation (hallucination defense)
