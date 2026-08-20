@@ -107,6 +107,7 @@ class VoiceSession:
             query = self.transcript_buffer.strip() or "What is the main topic in the retrieved context?"
 
         # 2. Guardrails + retrieval in parallel
+        t_rag_start = time.perf_counter()
         guardrail_task = asyncio.create_task(
             Guardrails.run_parallel_input_guardrail(query)
         )
@@ -126,11 +127,11 @@ class VoiceSession:
 
         # 3. Grounded generation (Groq with fallback)
         self.generate_task = asyncio.create_task(
-            self._generate_response(query, final_context)
+            self._generate_response(query, final_context, t_rag_start)
         )
 
     # ------------------------------------------------------ generation path
-    async def _generate_response(self, query: str, context: list):
+    async def _generate_response(self, query: str, context: list, t_rag_start: float):
         """Grounded generation + output grounding validation + Sarvam TTS."""
         self.is_generating = True
         t_start = time.perf_counter()
@@ -165,9 +166,14 @@ Question:
                             temperature=0.1,
                             stream=True,
                         )
+                        ttft_ms = 0
                         async for chunk in response:
+                            if not ttft_ms:
+                                ttft_ms = (time.perf_counter() - t_rag_start) * 1000
                             if chunk.choices[0].delta.content:
                                 full_answer += chunk.choices[0].delta.content
+                        if not ttft_ms:
+                            ttft_ms = (time.perf_counter() - t_rag_start) * 1000
                         break
                     except Exception as exc:
                         print(f"[groq] attempt {attempt + 1} failed: {exc}")
@@ -191,6 +197,7 @@ Question:
                     full_answer = (
                         "I couldn't find relevant information in the retrieved context."
                     )
+                ttft_ms = (time.perf_counter() - t_rag_start) * 1000
 
             # Output grounding validation (hallucination defense)
             t_ground = time.perf_counter_ns()
@@ -198,7 +205,7 @@ Question:
             grounded = Guardrails.check_grounding(full_answer, retrieved_ids)
             ground_ms = (time.perf_counter_ns() - t_ground) / 1e6
 
-            total_ms = round((time.perf_counter() - t_start) * 1000, 1)
+            total_ms = round(ttft_ms, 1)
 
             sources = []
             for c in context:
