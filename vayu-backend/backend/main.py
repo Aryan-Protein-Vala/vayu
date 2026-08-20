@@ -30,7 +30,9 @@ async def websocket_endpoint(websocket: WebSocket):
                     await session.handle_partial_transcript(data["text"])
                 elif data.get("event") == "FINAL":
                     await session.handle_endpoint(data["text"])
-    except WebSocketDisconnect:
+    except (WebSocketDisconnect, RuntimeError):
+        # RuntimeError: "Cannot call receive once a disconnect message has been received"
+        await session.close()
         print("Client disconnected")
 
 @app.get("/api/benchmark/results")
@@ -43,4 +45,6 @@ async def get_benchmark_results():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("backend.main:app", host="0.0.0.0", port=8000, reload=True)
+    # reload only in dev; set VAYU_ENV=production in deployment
+    reload = os.getenv("VAYU_ENV", "dev") != "production"
+    uvicorn.run("backend.main:app", host="0.0.0.0", port=8000, reload=reload)

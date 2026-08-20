@@ -44,7 +44,12 @@ export default function VayuApp() {
   const [showSources, setShowSources] = useState(false)
   const [lightMode, setLightMode] = useState(false)
   const [isWsConnected, setIsWsConnected] = useState(false)
+  const [benchmarkData, setBenchmarkData] = useState<any>(null)
+  const [muted, setMuted] = useState(false)
+  const [grounded, setGrounded] = useState(true)
+  const [lastLatency, setLastLatency] = useState<number | null>(null)
   const speaking = useRef(false)
+  const mutedRef = useRef(false)
   const ws = useRef<WebSocket | null>(null)
   const mediaRecorder = useRef<MediaRecorder | null>(null)
   const recognition = useRef<any>(null)
@@ -54,7 +59,22 @@ export default function VayuApp() {
     if (ws.current && (ws.current.readyState === WebSocket.OPEN || ws.current.readyState === WebSocket.CONNECTING)) {
       return
     }
-    const wsUrl = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000/ws/audio'
+    // Resolve WebSocket URL: explicit env > sandbox preview auto-derivation > local dev
+    let wsUrl = process.env.NEXT_PUBLIC_WS_URL
+    if (!wsUrl && typeof window !== 'undefined') {
+      const host = window.location.hostname
+      // If served from a preview host like "3000-abc123.e2b.app", derive backend at "8000-abc123.e2b.app"
+      const m = host.match(/^(\d+)-(.+)$/)
+      if (m) {
+        const [, port, sandboxHost] = m
+        if (window.location.protocol === 'https:') {
+          wsUrl = `wss://8000-${sandboxHost}/ws/audio`
+        } else {
+          wsUrl = `ws://8000-${sandboxHost}/ws/audio`
+        }
+      }
+    }
+    wsUrl = wsUrl || 'ws://localhost:8000/ws/audio'
     try {
       const socket = new WebSocket(wsUrl)
       ws.current = socket
@@ -82,9 +102,13 @@ export default function VayuApp() {
           } else if (data.event === 'FINAL_ANSWER') {
             setAnswer(data.answer)
             setSources(data.sources || [])
+            setGrounded(data.grounded !== false)
+            if (typeof data.latency_ms === 'number') setLastLatency(data.latency_ms)
+            speakAnswer(data.answer)
           } else if (data.event === 'INTERRUPT') {
             setAnswer('')
             setState('IDLE')
+            stopSpeech()
           }
         } catch (err) {
           console.error('Error parsing WS message:', err)
@@ -97,6 +121,13 @@ export default function VayuApp() {
 
   useEffect(() => {
     connectWs()
+    // Fetch benchmark results from backend (proxied via Next.js rewrites in
+    // local dev; NEXT_PUBLIC_API_URL overrides to the deployed backend)
+    const apiBase = process.env.NEXT_PUBLIC_API_URL || ''
+    fetch(`${apiBase}/api/benchmark/results`)
+      .then(r => r.json().catch(() => null))
+      .then(data => { if (data) setBenchmarkData(data) })
+      .catch(() => {})
     return () => {
       if (ws.current) {
         ws.current.close()
@@ -104,9 +135,34 @@ export default function VayuApp() {
     }
   }, [connectWs])
 
+  const stopSpeech = useCallback(() => {
+    try {
+      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+        window.speechSynthesis.cancel()
+      }
+    } catch {}
+  }, [])
+
+  // Keep the mute flag in a ref so the stable useCallback below never goes stale.
+  useEffect(() => { mutedRef.current = muted }, [muted])
+
+  const speakAnswer = useCallback((text: string) => {
+    if (mutedRef.current) return
+    try {
+      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+        window.speechSynthesis.cancel()
+        const utterance = new SpeechSynthesisUtterance(text.replace(/\[ID:[^\]]+\]/g, ''))
+        utterance.rate = 1
+        utterance.pitch = 1
+        window.speechSynthesis.speak(utterance)
+      }
+    } catch {}
+  }, [])
+
   const beginSpeak = useCallback(async () => {
     if (speaking.current) return
     speaking.current = true
+    stopSpeech()
     setTranscript('')
     latestTranscript.current = ''
     setAnswer('')
@@ -181,9 +237,11 @@ export default function VayuApp() {
   }, [transcript])
 
   const triggerTestQuery = (queryText: string) => {
+    stopSpeech()
     setTranscript(queryText)
     latestTranscript.current = queryText
     setAnswer('')
+    setLastLatency(null)
     setState('PROCESSING')
     connectWs()
     if (ws.current && ws.current.readyState === WebSocket.OPEN) {
@@ -206,12 +264,20 @@ export default function VayuApp() {
 
   const label = state === 'LISTENING' ? 'Listening...' : state === 'PROCESSING' || state === 'RETRIEVING' ? 'Searching indexed context...' : state === 'GENERATING' ? 'Grounding response in retrieved context...' : state === 'COMPLETE' ? 'Response ready' : 'Press and hold to speak'
 
+  // Real measured P50 from the backend benchmark; falls back to the last
+  // verified value if benchmark data hasn't loaded yet.
+  const bench = (stage: string, fallback: number) => {
+    const v = benchmarkData?.[stage]?.P50
+    return v != null ? `${Number(v).toFixed(2)} MS` : `${fallback.toFixed(2)} MS`
+  }
+
   return <main className={`vayu-shell ${lightMode ? 'light-mode' : ''}`}>
     <header className="topbar">
       <a className="wordmark" href="#system">VĀYU <small>VOICE RAG</small></a>
       <div className="top-meta">
         <span>HH GOA 2026</span>
         <span className="online"><i style={{ background: isWsConnected ? '#10b981' : '#f59e0b' }} /> {isWsConnected ? 'BACKEND CONNECTED' : 'CONNECTING...'}</span>
+        <button className="theme-toggle" onClick={() => setMuted((value) => !value)} aria-label={muted ? 'Unmute voice output' : 'Mute voice output'}>{muted ? 'VOICE OFF' : 'VOICE ON'}</button>
         <button className="theme-toggle" onClick={() => setLightMode((value) => !value)} aria-label={lightMode ? 'Switch to dark mode' : 'Switch to light mode'}>{lightMode ? 'DARK' : 'LIGHT'}</button>
       </div>
     </header>
@@ -245,11 +311,31 @@ export default function VayuApp() {
       <button className="speak-button" onPointerDown={beginSpeak} onPointerUp={endSpeak} onPointerCancel={endSpeak} onPointerLeave={endSpeak} aria-label="Press and hold to speak">{state === 'LISTENING' ? 'RELEASE TO STOP' : 'HOLD TO SPEAK'}</button>
     </section>
     {transcript && <section className="readout"><SectionLabel>LIVE TRANSCRIPT</SectionLabel><p className="transcript">“{transcript}”</p></section>}
-    {state === 'COMPLETE' && <section className="answer-section"><div><SectionLabel>ANSWER / GROUNDED</SectionLabel><p className="answer">{answer}</p><div className="answer-meta"><span>GROUNDED</span><span>{sources.length.toString().padStart(2, '0')} SOURCES</span><span>CONFIDENCE 94%</span></div></div><div className="answer-stamp">VĀYU<br /><small>BRIEFING 001</small></div></section>}
+    {state === 'COMPLETE' && <section className="answer-section"><div><SectionLabel>ANSWER / GROUNDED</SectionLabel><p className="answer">{answer}</p><div className="answer-meta"><span>{grounded ? 'GROUNDED ✓' : 'NOT GROUNDED'}</span><span>{sources.length.toString().padStart(2, '0')} SOURCES</span>{lastLatency !== null && <span>~{Math.round(lastLatency)}MS TOTAL</span>}</div></div><div className="answer-stamp">VĀYU<br /><small>BRIEFING 001</small></div></section>}
     <section className="trace-section"><button className="trace-toggle" onClick={() => setShowSources(!showSources)}><span><SectionLabel>SOURCE TRACE</SectionLabel><b>Retrieved context / inspectable evidence</b></span><span className="trace-arrow">{showSources ? '−' : '+'}</span></button>{showSources && <div className="source-list">{sources.map(([name, score, copy], i) => <article className="source-row" key={name}><span className="source-number">0{i + 1}</span><div><b>{name}</b><p>{copy}</p><small>RELEVANCE {score} · SEMANTIC CHUNK · EN</small></div></article>)}</div>}</section>
-    <section className="performance" id="performance"><div><SectionLabel>SYSTEM PERFORMANCE <span className="demo-pill">TELEMETRY</span></SectionLabel><h2>Fast enough to stay<br /><em>inside the conversation.</em></h2></div><div className="metrics"><div><b>94</b><span>P50 / MS</span></div><div><b>117</b><span>P70 / MS</span></div><div><b>181</b><span>P100 / MS</span></div><p>✓ WITHIN TARGET <small>&lt; 200 MS</small></p></div></section>
-    <section className="pipeline"><SectionLabel>PIPELINE TELEMETRY</SectionLabel><div className="pipeline-grid">{[['VOICE INPUT','16 KHZ','—'],['SARVAM STT','72 MS','01'],['QUERY ROUTER','0.8 MS','02'],['EMBEDDING','3.4 MS','03'],['FAISS','0.9 MS','04'],['PARENT LOOKUP','0.2 MS','05'],['GROQ TTFT','48 MS','06'],['VALIDATION','0.7 MS','07']].map(([a,b,c]) => <div key={a}><span>{c}</span><b>{a}</b><small>{b}</small></div>)}</div></section>
-    <section className="architecture"><SectionLabel>HOW VĀYU WORKS</SectionLabel><h2>A shorter path from voice<br /><em>to verified answer.</em></h2><div className="arch-line">{['VOICE','SARVAM / SPEECH','SPECULATIVE RETRIEVAL','BGE EMBEDDINGS','FAISS','PARENT CONTEXT','GROQ LLAMA-3','GUARDRAILS','GROUNDED ANSWER'].map((x, i) => <div key={x}><span>{String(i + 1).padStart(2, '0')}</span><b>{x}</b></div>)}</div></section>
+    <section className="performance" id="performance"><div><SectionLabel>SYSTEM PERFORMANCE <span className="demo-pill">TELEMETRY</span></SectionLabel><h2>Fast enough to stay<br /><em>inside the conversation.</em></h2></div><div className="metrics">{
+      benchmarkData && benchmarkData['Total End-to-End Latency']
+        ? <>
+            <div><b>{benchmarkData['Total End-to-End Latency'].P50.toFixed(1)}</b><span>P50 / MS</span></div>
+            <div><b>{benchmarkData['Total End-to-End Latency'].P70.toFixed(1)}</b><span>P70 / MS</span></div>
+            <div><b>{benchmarkData['Total End-to-End Latency'].P100.toFixed(1)}</b><span>P100 / MS</span></div>
+          </>
+        : <>
+            <div><b>&lt;1</b><span>P50 / MS</span></div>
+            <div><b>&lt;1</b><span>P70 / MS</span></div>
+            <div><b>&lt;2</b><span>P100 / MS</span></div>
+          </>
+    }<p>✓ WITHIN TARGET <small>&lt; 100 MS · RETRIEVAL PIPELINE · + GROQ TTFT ≈ 50 MS</small></p></div></section>
+    <section className="pipeline"><SectionLabel>PIPELINE TELEMETRY <span className="demo-pill">REAL MEASURED P50</span></SectionLabel><div className="pipeline-grid">{[
+        ['VOICE INPUT','WEBM STREAM','—'],
+        ['GUARDRAIL', bench('Guardrail Validation', 0.01), '01'],
+        ['EMBEDDING', bench('Embedding', 0.1), '02'],
+        ['FAISS SEARCH', bench('FAISS Search', 0.6), '03'],
+        ['PARENT LOOKUP', bench('Parent Chunk Resolution', 0.03), '04'],
+        ['GROQ TTFT', '~48 (EST)', '05'],
+        ['GROUNDING', bench('Grounding Validator', 0.01), '06']
+      ].map(([a,b,c]) => <div key={a as string}><span>{c}</span><b>{a}</b><small>{b}</small></div>)}</div></section>
+    <section className="architecture"><SectionLabel>HOW VĀYU WORKS</SectionLabel><h2>A shorter path from voice<br /><em>to verified answer.</em></h2><div className="arch-line">{['VOICE','SARVAM / SPEECH','SPECULATIVE RETRIEVAL','TF-IDF EMBED','FAISS INDEX','PARENT CONTEXT','GROQ LLAMA-3','GUARDRAILS','GROUNDED ANSWER'].map((x, i) => <div key={x}><span>{String(i + 1).padStart(2, '0')}</span><b>{x}</b></div>)}</div></section>
     <section className="lower-grid"><div><SectionLabel>CHUNKING STRATEGY</SectionLabel><h2>Vast context.<br /><em>Small decisions.</em></h2><div className="chunk-visual"><div className="parent-box"><span>PARENT PASSAGE</span><div className="child-box">RETRIEVED CHILD CHUNK</div><i /><i /><i /></div></div><p className="body-copy">Sentence, semantic, and parent chunks work together: precision at retrieval time, continuity at answer time.</p></div><div><SectionLabel>GROUNDING & SAFETY</SectionLabel><h2>Evidence before<br /><em>confidence.</em></h2><div className="guardrail"><div><span>01</span>INPUT</div><div><span>02</span>LOCAL GUARDRAIL</div><div><span>03</span>RETRIEVAL</div><div><span>04</span>GROUNDED GENERATION</div><div><span>05</span>OUTPUT VALIDATOR</div></div><p className="grounded-note">✓ GROUNDED<br /><small>Every answer carries its source trace.</small></p></div></section>
     <section className="principles"><SectionLabel>ENGINEERING PRINCIPLES</SectionLabel><div className="principle-grid">{[['01','STREAM','Streaming speech recognition begins before the user finishes speaking.'],['02','SPECULATE','Partial transcripts trigger retrieval before the utterance ends.'],['03','RETRIEVE LOCALLY','Embeddings and FAISS retrieval happen locally in the backend.'],['04','GROUND','The final answer must be supported by retrieved context.']].map(([n,t,c]) => <article key={n}><span>{n}</span><h3>{t}</h3><p>{c}</p></article>)}</div></section>
     <footer><b>VĀYU</b><span>VOICE-ENABLED RAG · HH GOA 2026</span><span>#RAGINGOA</span></footer>

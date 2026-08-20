@@ -10,10 +10,9 @@ venv/
 .env.*
 RAG/
 
-# Data (large files - commit index separately if needed)
-vayu-backend/data/index.faiss
-vayu-backend/data/chunks.json
-vayu-backend/data/parents.json
+# NOTE: vayu-backend/data/* is intentionally COMMITTED (small SQuAD test set)
+# so deployments (HF Spaces / Render) have a working index out of the box.
+# Swap in the full MSMARCO-XI index via scripts/build_chunks.py + build_index.py.
 
 # Node
 node_modules/

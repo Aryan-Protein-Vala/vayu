@@ -1,13 +1,13 @@
 fastapi
 uvicorn
 websockets
-onnxruntime
 faiss-cpu
-transformers
 groq
 httpx
 regex
-datasets
+python-dotenv
+python-multipart
+scikit-learn
+numpy
 pydantic
 pydantic-settings
-python-multipart
