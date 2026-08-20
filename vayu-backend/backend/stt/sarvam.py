@@ -55,7 +55,7 @@ class SarvamClient:
             self._http = httpx.AsyncClient(
                 base_url=self.base_url,
                 headers=headers,
-                timeout=30.0,
+                timeout=5.0,  # fast-fail: never stall the voice pipeline
             )
         return self._http
 
