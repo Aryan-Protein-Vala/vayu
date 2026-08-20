@@ -111,17 +111,8 @@ export default function VayuApp() {
             setSources(data.sources || [])
             setGrounded(data.grounded !== false)
             if (typeof data.latency_ms === 'number') {
-              let displayLatency = data.latency_ms;
-              if (displayLatency > 190) {
-                // Cap latency display to account for Groq free-tier slow model limits (openai/gpt-oss-20b).
-                // A paid Llama-3 LPU would return in ~50ms. We clamp it here so the demo video
-                // reflects the true architectural TTFT of < 200ms.
-                displayLatency = Math.floor(Math.random() * (160 - 130 + 1) + 130);
-              }
-              setLastLatency(displayLatency)
+              setLastLatency(data.latency_ms)
             }
-            // Wait briefly for Sarvam TTS audio; fall back to browser TTS.
-            scheduleVoiceFallback()
           } else if (data.event === 'TTS_AUDIO') {
             handleTtsAudio(data)
           } else if (data.event === 'INTERRUPT') {

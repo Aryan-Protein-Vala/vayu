@@ -11,6 +11,7 @@ import os
 import asyncio
 from backend.retrieval.engine import get_engine
 from backend.guardrails.rules import Guardrails
+from backend.orchestrator.voice_session import groq_client
 
 
 def print_table(results):
@@ -130,26 +131,48 @@ async def run():
                 "P70": float(f"{np.percentile(times, 70):.3f}"),
                 "P100": float(f"{np.percentile(times, 100):.3f}"),
             }
-    # Groq TTFT is an estimate (cannot be measured from offline sandbox)
-    summary["Groq TTFT (EST)"] = {
-        "P50": 48.0,
-        "P70": 52.0,
-        "P100": 68.0,
+    summary["Real Groq TTFT"] = {
+        "P50": float(f"{np.percentile(groq_ttfts, 50):.3f}") if groq_ttfts else 0.0,
+        "P70": float(f"{np.percentile(groq_ttfts, 70):.3f}") if groq_ttfts else 0.0,
+        "P100": float(f"{np.percentile(groq_ttfts, 100):.3f}") if groq_ttfts else 0.0,
     }
     with open(out_path, "w") as f:
         json.dump(summary, f, indent=4)
     print(f"Results saved to {out_path}")
 
+    # --- Live Groq TTFT Measurement ---
+    print("Measuring real Groq TTFT (5 queries)...")
+    groq_ttfts = []
+    if groq_client:
+        for _ in range(5):
+            t_g0 = time.perf_counter_ns()
+            try:
+                response = await groq_client.chat.completions.create(
+                    messages=[{"role": "user", "content": "Hello!"}],
+                    model="openai/gpt-oss-20b",
+                    temperature=0.1,
+                    stream=True
+                )
+                async for chunk in response:
+                    ttft = (time.perf_counter_ns() - t_g0) / 1e6
+                    groq_ttfts.append(ttft)
+                    break
+            except Exception as e:
+                print(f"Groq API error: {e}")
+                break
+    
     e2e = metrics["Total End-to-End Latency"]
     p50 = np.percentile(e2e, 50)
-    p70 = np.percentile(e2e, 70)
-    p100 = np.percentile(e2e, 100)
+    
     print()
-    print("VERDICT (guardrail + retrieval, excl. Groq TTFT):")
-    print(f"  P50:  {p50:.3f} ms  {'OK (<= 100ms)' if p50 <= 100 else 'HIGH'}")
-    print(f"  P70:  {p70:.3f} ms  {'OK (<= 100ms)' if p70 <= 100 else 'HIGH'}")
-    print(f"  P100: {p100:.3f} ms  {'OK (<= 100ms)' if p100 <= 100 else 'HIGH'}")
-    print(f"  + Groq TTFT ~48ms (EST) -> total ~{p50 + 48.0:.1f} ms P50")
+    print("VERDICT (guardrail + retrieval):")
+    print(f"  Retrieval P50: {p50:.3f} ms")
+    if groq_ttfts:
+        real_groq_p50 = np.percentile(groq_ttfts, 50)
+        print(f"  Real Groq TTFT P50: {real_groq_p50:.3f} ms")
+        print(f"  Total Real TTFT: {p50 + real_groq_p50:.3f} ms")
+    else:
+        print("  Groq API skipped or failed.")
     print()
 
 
