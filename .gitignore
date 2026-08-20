@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+venv/
+.env
+*.env
+.env.*
+RAG/
+
+# Data (large files - commit index separately if needed)
+vayu-backend/data/index.faiss
+vayu-backend/data/chunks.json
+vayu-backend/data/parents.json
+
+# Node
+node_modules/
+.next/
+.turbo/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# HuggingFace cache
+.cache/

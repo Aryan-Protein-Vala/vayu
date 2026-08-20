@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+websockets
+onnxruntime
+faiss-cpu
+transformers
+groq
+httpx
+regex
+datasets
+pydantic
+pydantic-settings
+python-multipart
