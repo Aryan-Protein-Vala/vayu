@@ -55,7 +55,7 @@ class SarvamClient:
             self._http = httpx.AsyncClient(
                 base_url=self.base_url,
                 headers=headers,
-                timeout=5.0,  # fast-fail: never stall the voice pipeline
+                timeout=15.0,
             )
         return self._http
 
@@ -72,7 +72,7 @@ class SarvamClient:
                 resp = await self.http.post(url, **kwargs)
                 resp.raise_for_status()
                 return resp.json()
-            except (httpx.HTTPError, asyncio.TimeoutError) as exc:
+            except (httpx.HTTPError, httpx.TimeoutException) as exc:
                 last_exc = exc
                 if attempt < self.max_retries - 1:
                     await asyncio.sleep(0.3 * (2 ** attempt))
@@ -136,7 +136,7 @@ class SarvamClient:
             return {}
         if not payload:
             return {}
-        audio_b64 = payload.get("audio") or ""
+        audio_b64 = payload.get("audios", [""])[0] if payload.get("audios") else ""
         fmt = payload.get("audio_format") or TTS_AUDIO_FORMAT
         return {"audio": audio_b64, "format": fmt} if audio_b64 else {}
 

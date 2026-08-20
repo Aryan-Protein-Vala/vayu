@@ -107,7 +107,7 @@ async def websocket_endpoint(websocket: WebSocket):
         while True:
             # We expect a mix of binary (audio) and text (events)
             message = await websocket.receive()
-            if "bytes" in message:
+            if message.get("bytes") is not None:
                 await session.handle_audio_chunk(message["bytes"])
             elif "text" in message:
                 data = json.loads(message["text"])

@@ -75,14 +75,14 @@ def sarvam_key_valid(key: str, timeout: int = 10) -> bool:
     try:
         payload = json.dumps({
             "target_language_code": "en-IN",
-            "speaker": "meera",
+            "speaker": "anushka",
             "pitch": 0,
             "pace": 1.0,
             "loudness": 1.0,
             "speech_sample_rate": 22050,
             "audio_format": "wav",
             "model": "bulbul:v2",
-            "text": "Testing one two three",
+            "inputs": ["Testing one two three"],
         }).encode()
         req = urllib.request.Request(
             "https://api.sarvam.ai/text-to-speech",
@@ -96,7 +96,7 @@ def sarvam_key_valid(key: str, timeout: int = 10) -> bool:
         )
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             body = json.loads(resp.read().decode())
-            return bool(body.get("audio"))
+            return bool(body.get("audios"))
     except urllib.error.HTTPError as e:
         print(f"    (HTTP {e.code}: {e.read()[:120]})")
         return False

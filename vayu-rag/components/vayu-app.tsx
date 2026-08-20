@@ -80,7 +80,7 @@ export default function VayuApp() {
         }
       }
     }
-    wsUrl = wsUrl || 'ws://localhost:8000/ws/audio'
+    wsUrl = wsUrl || (typeof window !== 'undefined' ? `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.hostname}:8000/ws/audio` : 'ws://localhost:8000/ws/audio')
     try {
       const socket = new WebSocket(wsUrl)
       ws.current = socket
@@ -297,21 +297,27 @@ export default function VayuApp() {
       recognition.current = null
     }
 
-    if (mediaRecorder.current && mediaRecorder.current.state !== 'inactive') {
-      try {
-        mediaRecorder.current.stop()
-        mediaRecorder.current.stream.getTracks().forEach(track => track.stop())
-      } catch {}
+    const sendFinal = () => {
+      const queryToSend = latestTranscript.current || transcript || ''
+      if (ws.current && ws.current.readyState === WebSocket.OPEN) {
+        ws.current.send(JSON.stringify({
+          event: 'FINAL',
+          text: queryToSend,
+          mime_type: mediaRecorder.current?.mimeType || 'audio/webm',
+        }))
+      }
     }
 
-    const queryToSend = latestTranscript.current || transcript || 'What is the main topic in the retrieved context?'
-
-    if (ws.current && ws.current.readyState === WebSocket.OPEN) {
-      ws.current.send(JSON.stringify({
-        event: 'FINAL',
-        text: queryToSend,
-        mime_type: mediaRecorder.current?.mimeType || 'audio/webm',
-      }))
+    if (mediaRecorder.current && mediaRecorder.current.state !== 'inactive') {
+      try {
+        mediaRecorder.current.onstop = sendFinal
+        mediaRecorder.current.stop()
+        mediaRecorder.current.stream.getTracks().forEach(track => track.stop())
+      } catch {
+        sendFinal()
+      }
+    } else {
+      sendFinal()
     }
   }, [transcript])
 
@@ -368,26 +374,7 @@ export default function VayuApp() {
         <SectionLabel>VOICE INPUT</SectionLabel>
         <strong>{label}</strong>
         <p className="hint">Hold the orb or press and hold <kbd>V</kbd>. Release to process.</p>
-        <div style={{ marginTop: '0.75rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-          <span style={{ fontSize: '0.75rem', opacity: 0.7 }}>Quick Queries:</span>
-          {['What is Super Bowl 50?', 'Where is the Golden Gate Bridge located?', 'Who won the championship?'].map((q) => (
-            <button
-              key={q}
-              onClick={() => triggerTestQuery(q)}
-              style={{
-                fontSize: '0.75rem',
-                padding: '0.2rem 0.5rem',
-                borderRadius: '4px',
-                border: '1px solid rgba(255,255,255,0.15)',
-                background: 'rgba(255,255,255,0.05)',
-                color: 'inherit',
-                cursor: 'pointer'
-              }}
-            >
-              {q}
-            </button>
-          ))}
-        </div>
+
       </div>
       <button className="speak-button" onPointerDown={beginSpeak} onPointerUp={endSpeak} onPointerCancel={endSpeak} onPointerLeave={endSpeak} aria-label="Press and hold to speak">{state === 'LISTENING' ? 'RELEASE TO STOP' : 'HOLD TO SPEAK'}</button>
     </section>

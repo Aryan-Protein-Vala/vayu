@@ -157,8 +157,8 @@ Question:
                 for attempt in range(2):
                     try:
                         response = await groq_client.chat.completions.create(
-                            messages=[{"role": "system", "content": prompt}],
-                            model="llama-3.1-8b-instant",
+                            messages=[{"role": "user", "content": prompt}],
+                            model="openai/gpt-oss-20b",
                             temperature=0.1,
                             stream=True,
                         )

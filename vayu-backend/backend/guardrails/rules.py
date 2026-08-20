@@ -29,7 +29,7 @@ class Guardrails:
         citations = set(CITATION_REGEX.findall(answer))
         if not citations:
             return True
-        return citations.issubset(retrieved_parent_ids)
+        return citations.issubset({str(i) for i in retrieved_parent_ids})
 
     @staticmethod
     async def run_parallel_input_guardrail(query: str):
