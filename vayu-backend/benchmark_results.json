@@ -1,42 +1,52 @@
 {
-    "Guardrail Validation": {
-        "P50": 0.005,
-        "P70": 0.005,
-        "P100": 0.009
+    "guardrail": {
+        "avg": 0.005,
+        "p50": 0.004,
+        "p95": 0.009,
+        "p99": 0.01
     },
-    "Embedding": {
-        "P50": 0.512,
-        "P70": 0.527,
-        "P100": 0.779
+    "embed": {
+        "avg": 0.63,
+        "p50": 0.526,
+        "p95": 1.023,
+        "p99": 1.242
     },
-    "FAISS Search": {
-        "P50": 0.018,
-        "P70": 0.018,
-        "P100": 0.029
+    "faiss search": {
+        "avg": 0.026,
+        "p50": 0.02,
+        "p95": 0.049,
+        "p99": 0.051
     },
-    "Parent Chunk Resolution": {
-        "P50": 0.009,
-        "P70": 0.01,
-        "P100": 0.037
+    "parent resolution": {
+        "avg": 0.011,
+        "p50": 0.01,
+        "p95": 0.017,
+        "p99": 0.019
     },
-    "Grounding Validator": {
-        "P50": 0.005,
-        "P70": 0.006,
-        "P100": 0.034
+    "grounding validator": {
+        "avg": 0.005,
+        "p50": 0.005,
+        "p95": 0.008,
+        "p99": 0.009
     },
-    "Total End-to-End Latency": {
-        "P50": 0.651,
-        "P70": 0.733,
-        "P100": 1.926
+    "total local retrieval": {
+        "avg": 0.851,
+        "p50": 0.723,
+        "p95": 1.381,
+        "p99": 1.657
     },
-    "Cache Hit Latency": {
-        "P50": 0.666,
-        "P70": 0.725,
-        "P100": 0.777
+    "cache hit": {
+        "avg": 0.736,
+        "p50": 0.736,
+        "p95": 0.736,
+        "p99": 0.736
     },
-    "Groq TTFT (EST)": {
-        "P50": 48.0,
-        "P70": 52.0,
-        "P100": 68.0
+    "verdict": {
+        "local_p95_ms": 1.381,
+        "local_budget_ms": 50,
+        "local_pass": true,
+        "rag_ttft_p50_ms": null,
+        "rag_ttft_budget_ms": 200,
+        "rag_ttft_pass": null
     }
 }
