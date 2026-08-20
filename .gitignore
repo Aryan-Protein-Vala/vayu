@@ -11,9 +11,15 @@ venv/
 !.env.example
 RAG/
 
-# NOTE: vayu-backend/data/* is intentionally COMMITTED (small SQuAD test set)
-# so deployments (HF Spaces / Render) have a working index out of the box.
-# Swap in the full MSMARCO-XI index via scripts/build_chunks.py + build_index.py.
+# Large Data files & Indices
+*.parquet
+*.faiss
+*.tsbuildinfo
+vayu-backend/data/index.faiss
+vayu-backend/data/chunks.json
+vayu-backend/data/parents.json
+vayu-backend/*.parquet
+test_groq.txt
 
 # Node
 node_modules/

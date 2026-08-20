@@ -55,7 +55,7 @@ class SarvamClient:
             self._http = httpx.AsyncClient(
                 base_url=self.base_url,
                 headers=headers,
-                timeout=15.0,
+                timeout=30.0,
             )
         return self._http
 
@@ -93,8 +93,8 @@ class SarvamClient:
             elif "ogg" in mime_type:
                 ext = "ogg"
             payload = await self._post_with_retry(
-                "/speech-to-text",
-                data={"model": self.stt_model},
+                "/speech-to-text-translate",
+                data={"model": "saaras:v1"},
                 files={"file": (f"audio.{ext}", audio_bytes, mime_type or "audio/webm")},
             )
         except Exception as exc:  # never let STT break the pipeline

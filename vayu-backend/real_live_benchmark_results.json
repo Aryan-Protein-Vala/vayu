@@ -1,0 +1,57 @@
+{
+    "1. Sarvam STT (Live Cloud API)": {
+        "P50": 450.486,
+        "P70": 461.51,
+        "P100": 794.453
+    },
+    "2. Guardrail Validation (Local)": {
+        "P50": 0.029,
+        "P70": 0.034,
+        "P100": 0.056
+    },
+    "3. TF-IDF Embedding (Local)": {
+        "P50": 1.791,
+        "P70": 2.356,
+        "P100": 89.694
+    },
+    "4. FAISS Vector Search (Local)": {
+        "P50": 52.857,
+        "P70": 59.366,
+        "P100": 67.263
+    },
+    "5. Parent Chunk Resolution (Local)": {
+        "P50": 0.068,
+        "P70": 0.073,
+        "P100": 0.099
+    },
+    "6. Groq LLM TTFT (Live Cloud API)": {
+        "P50": 542.722,
+        "P70": 636.904,
+        "P100": 760.253
+    },
+    "7. Groq LLM Total Gen (Live Cloud API)": {
+        "P50": 712.467,
+        "P70": 762.221,
+        "P100": 1150.289
+    },
+    "8. Grounding Validator (Local)": {
+        "P50": 0.018,
+        "P70": 0.019,
+        "P100": 0.024
+    },
+    "9. Sarvam TTS (Live Cloud API)": {
+        "P50": 1688.024,
+        "P70": 1792.853,
+        "P100": 2116.419
+    },
+    "TOTAL RAG TTFT (Local RAG + Groq TTFT)": {
+        "P50": 612.587,
+        "P70": 756.61,
+        "P100": 814.724
+    },
+    "TOTAL END-TO-END VOICE PIPELINE": {
+        "P50": 2929.681,
+        "P70": 3338.07,
+        "P100": 3680.535
+    }
+}

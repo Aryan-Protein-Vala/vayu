@@ -52,4 +52,4 @@ async def groq_available() -> bool:
 async def sarvam_available() -> bool:
     import os
     headers = {"api-subscription-key": os.getenv("SARVAM_API_KEY", "")}
-    return await _probe_cached("sarvam", "https://api.sarvam.ai", headers=headers)
+    return await _probe_cached("sarvam", "https://api.sarvam.ai/text-to-speech", headers=headers)

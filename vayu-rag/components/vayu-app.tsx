@@ -80,7 +80,7 @@ export default function VayuApp() {
         }
       }
     }
-    wsUrl = wsUrl || (typeof window !== 'undefined' ? `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.hostname}:8000/ws/audio` : 'ws://localhost:8000/ws/audio')
+    wsUrl = wsUrl || `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.hostname}:8000/ws/audio`
     try {
       const socket = new WebSocket(wsUrl)
       ws.current = socket
@@ -281,6 +281,12 @@ export default function VayuApp() {
         if (e.data.size > 0 && ws.current && ws.current.readyState === WebSocket.OPEN) {
           ws.current.send(e.data)
         }
+        if (recorder.state === 'inactive' && ws.current && ws.current.readyState === WebSocket.OPEN) {
+          ws.current.send(JSON.stringify({ 
+            event: 'FINAL', 
+            mime_type: recorder.mimeType || 'audio/webm' 
+          }))
+        }
       }
       recorder.start(200)
     } catch (err) {
@@ -297,27 +303,21 @@ export default function VayuApp() {
       recognition.current = null
     }
 
-    const sendFinal = () => {
-      const queryToSend = latestTranscript.current || transcript || ''
-      if (ws.current && ws.current.readyState === WebSocket.OPEN) {
-        ws.current.send(JSON.stringify({
-          event: 'FINAL',
-          text: queryToSend,
-          mime_type: mediaRecorder.current?.mimeType || 'audio/webm',
-        }))
-      }
-    }
-
     if (mediaRecorder.current && mediaRecorder.current.state !== 'inactive') {
       try {
-        mediaRecorder.current.onstop = sendFinal
+        const stream = mediaRecorder.current.stream;
+        mediaRecorder.current.onstop = () => {
+          stream.getTracks().forEach(track => track.stop())
+        }
         mediaRecorder.current.stop()
-        mediaRecorder.current.stream.getTracks().forEach(track => track.stop())
       } catch {
-        sendFinal()
+        // Error
       }
-    } else {
-      sendFinal()
+    } else if (ws.current && ws.current.readyState === WebSocket.OPEN) {
+      ws.current.send(JSON.stringify({
+        event: 'FINAL',
+        mime_type: mediaRecorder.current?.mimeType || 'audio/webm',
+      }))
     }
   }, [transcript])
 

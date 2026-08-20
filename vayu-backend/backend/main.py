@@ -109,7 +109,7 @@ async def websocket_endpoint(websocket: WebSocket):
             message = await websocket.receive()
             if message.get("bytes") is not None:
                 await session.handle_audio_chunk(message["bytes"])
-            elif "text" in message:
+            elif message.get("text") is not None:
                 data = json.loads(message["text"])
                 if data.get("event") == "PARTIAL":
                     await session.handle_partial_transcript(data["text"])
