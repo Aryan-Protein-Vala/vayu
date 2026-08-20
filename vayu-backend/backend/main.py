@@ -7,10 +7,36 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "../.env"))
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from backend.orchestrator.voice_session import VoiceSession
+from backend.netstatus import groq_available, sarvam_available
+from contextlib import asynccontextmanager
+import asyncio
 import json
 import socket as _socket
 
-app = FastAPI(title="VĀYU Voice RAG Backend")
+
+async def _warm_probes():
+    """Fire-and-forget warm-up so the FIRST user query pays nothing:
+    1. probe API reachability (circuit-breaker cache)
+    2. load the FAISS retrieval engine (lazy init would otherwise add ~1s
+       to the first query)"""
+    try:
+        await asyncio.gather(groq_available(), sarvam_available())
+    except Exception:
+        pass
+    try:
+        from backend.retrieval.engine import get_engine
+        get_engine()  # eager-load FAISS index + parents + vectorizer
+    except Exception:
+        pass
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    asyncio.create_task(_warm_probes())
+    yield
+
+
+app = FastAPI(title="VĀYU Voice RAG Backend", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -105,6 +131,32 @@ async def get_benchmark_results():
         with open(results_path, "r") as f:
             return json.load(f)
     return {"message": "Benchmark not run yet."}
+
+
+# ------------------------------------------------------------------ status
+# Cached reachability probe so the UI can honestly show LIVE vs FALLBACK mode.
+# Shares the same circuit-breaker cache used by the orchestrator.
+_status_cache = {"ts": 0.0, "data": None}
+
+
+@app.get("/api/status")
+async def get_status():
+    import time as _time
+    now = _time.time()
+    if _status_cache["data"] is None or now - _status_cache["ts"] > 30:
+        groq_ok = await groq_available()
+        sarvam_ok = await sarvam_available()
+        _status_cache["ts"] = now
+        _status_cache["data"] = {
+            "groq_key": bool(os.getenv("GROQ_API_KEY")),
+            "sarvam_key": bool(os.getenv("SARVAM_API_KEY")),
+            "groq_reachable": groq_ok,
+            "sarvam_reachable": sarvam_ok,
+            "engine_mode": "live" if groq_ok else "fallback",
+            "voice_mode": "sarvam" if sarvam_ok else "browser",
+            "tts_speaker": os.getenv("SARVAM_TTS_SPEAKER", "meera"),
+        }
+    return _status_cache["data"]
 
 
 if __name__ == "__main__":

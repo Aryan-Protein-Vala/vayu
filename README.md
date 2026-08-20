@@ -130,16 +130,19 @@ source venv/bin/activate
 # Install dependencies
 pip install -r requirements.txt
 
-# Create .env file with your free keys:
-# SARVAM_API_KEY=your_sarvam_key
-# GROQ_API_KEY=your_groq_key
-# HF_TOKEN=your_hf_token
+# Create .env file with your free keys (MUST exist BEFORE starting the backend):
+cp .env.example .env   # then fill in your keys
 
 # Optional voice tuning:
 # SARVAM_STT_MODEL=saaras:v2
 # SARVAM_TTS_MODEL=bulbul:v2
 # SARVAM_TTS_SPEAKER=meera            # try: meera, arvind, plus multilingual
 # SARVAM_TTS_LANGUAGE=en-IN
+
+# Diagnose keys + connectivity from THIS machine (run on your laptop/server):
+python scripts/check_api_keys.py
+# → every ✅ = the app runs LIVE (Sarvam voices + Groq LLM)
+# → any ❌ = fix that line, then restart the backend
 
 # Build dataset chunks & FAISS index (One-time setup)
 # Option A: local synthetic SQuAD-like data (works offline)
@@ -177,7 +180,16 @@ cd vayu-backend
 python -m backend.benchmark.run_benchmark
 ```
 
-### 5. Deploy Audit — full workflow simulation (28 checks)
+### 5. Engine status — why AI may look "off"
+The backend exposes `GET /api/status` (keys present? Groq/Sarvam reachable?).
+The site header shows **`AI LIVE`** (green) when Groq + Sarvam are reachable,
+**`AI FALLBACK`** (amber) when they aren't (e.g. offline sandbox). A
+circuit-breaker (`backend/netstatus.py`) probes reachability every 30s and
+skips straight to the fallback path while APIs are unreachable — so queries
+stay sub-10ms instead of stalling on network timeouts. Run
+`python scripts/check_api_keys.py` on the demo machine to verify LIVE mode.
+
+### 6. Deploy Audit — full workflow simulation (28 checks)
 ```bash
 cd vayu-backend
 python scripts/audit_ws.py

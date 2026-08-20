@@ -8,6 +8,7 @@ venv/
 .env
 *.env
 .env.*
+!.env.example
 RAG/
 
 # NOTE: vayu-backend/data/* is intentionally COMMITTED (small SQuAD test set)

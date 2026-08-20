@@ -45,6 +45,7 @@ export default function VayuApp() {
   const [lightMode, setLightMode] = useState(false)
   const [isWsConnected, setIsWsConnected] = useState(false)
   const [benchmarkData, setBenchmarkData] = useState<any>(null)
+  const [apiStatus, setApiStatus] = useState<any>(null)
   const [muted, setMuted] = useState(false)
   const [grounded, setGrounded] = useState(true)
   const [lastLatency, setLastLatency] = useState<number | null>(null)
@@ -136,6 +137,11 @@ export default function VayuApp() {
     fetch(`${apiBase}/api/benchmark/results`)
       .then(r => r.json().catch(() => null))
       .then(data => { if (data) setBenchmarkData(data) })
+      .catch(() => {})
+    // Engine status: LIVE (Groq+Sarvam reachable) vs FALLBACK (offline sandbox)
+    fetch(`${apiBase}/api/status`)
+      .then(r => r.json().catch(() => null))
+      .then(data => { if (data) setApiStatus(data) })
       .catch(() => {})
     return () => {
       if (ws.current) {
@@ -350,6 +356,7 @@ export default function VayuApp() {
       <div className="top-meta">
         <span>HH GOA 2026</span>
         <span className="online"><i style={{ background: isWsConnected ? '#10b981' : '#f59e0b' }} /> {isWsConnected ? 'BACKEND CONNECTED' : 'CONNECTING...'}</span>
+        <span className="online" title={apiStatus ? `groq_key=${apiStatus.groq_key} sarvam_key=${apiStatus.sarvam_key} reachable_groq=${apiStatus.groq_reachable} reachable_sarvam=${apiStatus.sarvam_reachable}` : ''}><i style={{ background: apiStatus?.engine_mode === 'live' ? '#10b981' : '#f59e0b' }} /> {apiStatus ? (apiStatus.engine_mode === 'live' ? 'AI LIVE' : 'AI FALLBACK') : 'AI ...'}</span>
         <button className="theme-toggle" onClick={stopSpeech} aria-label="Stop audio">STOP AUDIO</button>
         <button className="theme-toggle" onClick={() => setMuted((value) => !value)} aria-label={muted ? 'Unmute voice output' : 'Mute voice output'}>{muted ? 'VOICE OFF' : 'VOICE ON'}</button>
         <button className="theme-toggle" onClick={() => setLightMode((value) => !value)} aria-label={lightMode ? 'Switch to dark mode' : 'Switch to light mode'}>{lightMode ? 'DARK' : 'LIGHT'}</button>

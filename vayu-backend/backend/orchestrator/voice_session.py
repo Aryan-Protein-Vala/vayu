@@ -2,15 +2,28 @@ import asyncio
 import json
 import os
 import time
+from dotenv import load_dotenv
+
+# Load .env FIRST so module-level key reads below (groq, sarvam) see them.
+# Path: vayu-backend/.env (two levels up from this file).
+load_dotenv(os.path.join(os.path.dirname(__file__), "../../.env"))
+
 from groq import AsyncGroq
 from backend.retrieval.engine import get_engine
 from backend.guardrails.rules import Guardrails
 from backend.stt.sarvam import get_sarvam
+from backend.netstatus import groq_available, sarvam_available
 from starlette.websockets import WebSocket
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 
-groq_client = AsyncGroq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
+# Short timeout + no SDK-internal retries: fast-fail instead of hanging the
+# WebSocket handler when the network is down. Our own retry loop handles retry.
+groq_client = (
+    AsyncGroq(api_key=GROQ_API_KEY, timeout=5.0, max_retries=0)
+    if GROQ_API_KEY
+    else None
+)
 
 
 class VoiceSession:
@@ -71,16 +84,21 @@ class VoiceSession:
         query = (final_text or "").strip()
 
         # 1. Sarvam STT on buffered audio (requirement #1: Sarvam STT).
-        #    Falls back to the browser transcript if audio/Sarvam unavailable.
+        #    Circuit-breaker: only call Sarvam when reachable; otherwise fall
+        #    back to the browser transcript immediately (no multi-second stall).
         if self.audio_buffer:
             if mime_type:
                 self.audio_mime = mime_type
-            stt_text = await self.sarvam.transcribe(bytes(self.audio_buffer), self.audio_mime)
-            self.audio_buffer.clear()
-            if stt_text:
-                query = stt_text
-                await self.ws.send_json({"event": "STT_RESULT", "text": query, "engine": "sarvam"})
+            if await sarvam_available():
+                stt_text = await self.sarvam.transcribe(bytes(self.audio_buffer), self.audio_mime)
+                self.audio_buffer.clear()
+                if stt_text:
+                    query = stt_text
+                    await self.ws.send_json({"event": "STT_RESULT", "text": query, "engine": "sarvam"})
+                else:
+                    await self.ws.send_json({"event": "STT_RESULT", "text": query, "engine": "browser"})
             else:
+                self.audio_buffer.clear()
                 await self.ws.send_json({"event": "STT_RESULT", "text": query, "engine": "browser"})
 
         if not query:
@@ -133,8 +151,9 @@ Question:
 """
         full_answer = ""
         try:
-            # Groq generation with a single retry (harness error recovery)
-            if groq_client:
+            # Groq generation with a single retry (harness error recovery).
+            # Circuit-breaker: skip straight to fallback when unreachable.
+            if groq_client and await groq_available():
                 for attempt in range(2):
                     try:
                         response = await groq_client.chat.completions.create(
@@ -223,16 +242,18 @@ Question:
         """Sarvam TTS -> wav audio over WebSocket. Frontend falls back to
         browser SpeechSynthesis if this event never arrives."""
         try:
-            result = await self.sarvam.synthesize(text)
-            if result.get("audio"):
-                await self.ws.send_json({
-                    "event": "TTS_AUDIO",
-                    "audio": result["audio"],
-                    "format": result.get("format", "wav"),
-                    "engine": "sarvam",
-                })
-            else:
-                await self.ws.send_json({"event": "TTS_AUDIO", "engine": "browser"})
+            if await sarvam_available():
+                result = await self.sarvam.synthesize(text)
+                if result.get("audio"):
+                    await self.ws.send_json({
+                        "event": "TTS_AUDIO",
+                        "audio": result["audio"],
+                        "format": result.get("format", "wav"),
+                        "engine": "sarvam",
+                    })
+                    return
+            # Unreachable / no audio -> browser voice
+            await self.ws.send_json({"event": "TTS_AUDIO", "engine": "browser"})
         except Exception as exc:
             print(f"[sarvam] TTS send failed: {exc}")
             try:
