@@ -1,6 +1,8 @@
 import asyncio
 import json
 import os
+import re
+import os
 import time
 from dotenv import load_dotenv
 
@@ -139,6 +141,7 @@ class VoiceSession:
         )
         prompt = f"""You are VĀYU, a highly precise AI assistant.
 Answer the user's question based strictly on the provided context.
+If the user says hello or greets you, greet them back warmly and ask how you can help.
 If the answer is not in the context, say so.
 When you use information from a passage, cite it exactly like [ID: <parent_id>]
 (e.g. [ID: doc_001]). Never invent citations.
@@ -206,10 +209,12 @@ Question:
                     preview,
                 ])
 
+            clean_answer = re.sub(r'\[ID:[^\]]+\]\s*', '', full_answer).strip()
+
             # Send the text answer immediately (low latency UX)...
             await self.ws.send_json({
                 "event": "FINAL_ANSWER",
-                "answer": full_answer,
+                "answer": clean_answer,
                 "sources": sources,
                 "grounded": grounded,
                 "latency_ms": total_ms,
@@ -218,7 +223,7 @@ Question:
             await self.ws.send_json({"event": "STATE", "state": "COMPLETE"})
 
             # ...then pipe the pretty voice (Sarvam TTS) — non-blocking.
-            asyncio.create_task(self._send_tts(full_answer))
+            asyncio.create_task(self._send_tts(clean_answer))
 
         except asyncio.CancelledError:
             print("Generation cancelled due to barge-in.")
